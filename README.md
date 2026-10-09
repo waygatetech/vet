@@ -59,6 +59,19 @@ vet review --plan plans/x-1.md
 vet lock --check --plan plans/x-1.md
 ```
 
+## Plan file
+
+vet reads these fields from a plan's YAML frontmatter and ignores any others
+(tix reads its own). A plan with frontmatter that isn't closed with `---`, or
+that isn't valid YAML, is an error for every command that reads it.
+
+| Field                | Type                    | Read by                                    | Required                                                         |
+| -------------------- | ----------------------- | ------------------------------------------ | ---------------------------------------------------------------- |
+| `ticket`             | string                  | `vet lock`, `vet lock --check`             | Yes, for `vet lock`. A plain file name: no `/`, not `..`.        |
+| `tests`              | list of globs           | `vet lock`, `vet lock --check`             | No. Without it, `--check` passes. `**` spans directories.        |
+| `critique_responses` | map of `C<n>` to string | `vet critique --check`                     | One non-empty answer per item in `plans/<plan>.critique.md`.     |
+| `contracts_changed`  | list of strings         | `vet review` (`contracts_changed` trigger) | No. Any entry triggers reviewers with `contracts_changed: true`. |
+
 ## Usage
 
 ```sh
