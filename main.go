@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/waygatetech/vet/internal/config"
 	"github.com/waygatetech/vet/internal/critique"
 	"github.com/waygatetech/vet/internal/findings"
+	"github.com/waygatetech/vet/internal/lock"
 	"github.com/waygatetech/vet/internal/review"
 )
 
@@ -98,7 +102,7 @@ func newRootCmd(stderr io.Writer) *cobra.Command {
 		},
 	}
 	cmd.PersistentFlags().StringVar(&configPath, "config", config.DefaultPath, "path to config file")
-	cmd.AddCommand(newCritiqueCmd(&a), newReviewCmd(&a))
+	cmd.AddCommand(newCritiqueCmd(&a), newReviewCmd(&a), newLockCmd(&a))
 	return cmd
 }
 
@@ -294,4 +298,90 @@ func newReviewCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&asJSON, "json", false, "write the findings JSON report to stdout")
 	cmd.Flags().IntVar(&tier, "tier", 0, "the ticket's review tier, for reviewers with when.min_tier")
 	return cmd
+}
+
+func newLockCmd(a *app) *cobra.Command {
+	var (
+		plan  string
+		check bool
+	)
+	cmd := &cobra.Command{
+		Use:   "lock --plan <plan.md>",
+		Short: "Freeze a plan's acceptance tests, or --check they are unchanged and passing",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if plan == "" {
+				return &exitError{code: exitUsage, err: errors.New("--plan is required")}
+			}
+			planText, err := read(plan)
+			if err != nil {
+				return err
+			}
+			ticket, tests, err := lock.Plan([]byte(planText))
+			if err != nil {
+				return &exitError{code: exitUsage, err: err}
+			}
+			if check && len(tests) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no locked tests")
+				return nil
+			}
+			if len(tests) == 0 {
+				return &exitError{code: exitUsage, err: errors.New("plan declares no tests")}
+			}
+			if len(a.cfg.TestCommand) == 0 {
+				return &exitError{code: exitUsage, err: errors.New("test_command is not set in config")}
+			}
+			path := lock.Path(ticket)
+			locked, err := lock.Read(path)
+			missing := errors.Is(err, fs.ErrNotExist)
+			if err != nil && !missing {
+				return &exitError{code: exitUsage, err: err}
+			}
+			current, err := lock.Snapshot(cmd.Context(), ticket, tests)
+			if err != nil {
+				return &exitError{code: exitUsage, err: err}
+			}
+			if check {
+				if missing {
+					return &exitError{code: exitBlocking, err: fmt.Errorf("tests not locked; run vet lock --plan %s", plan)}
+				}
+				return checkLock(cmd, a, locked, current)
+			}
+
+			// Re-locking needs a plan amendment, which the plan hook re-reviews.
+			if !missing && slices.Equal(locked.Tests, tests) {
+				return &exitError{code: exitBlocking, err: fmt.Errorf("%s already locked; amend the plan's tests to re-lock", ticket)}
+			}
+			if len(current.Files) == 0 {
+				return &exitError{code: exitUsage, err: errors.New("tests globs match no files")}
+			}
+			if err := lock.Write(path, current); err != nil {
+				return &exitError{code: exitUsage, err: err}
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), path)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&plan, "plan", "", "plan file whose tests globs to lock (required)")
+	cmd.Flags().BoolVar(&check, "check", false, "exit 1 if locked tests changed or test_command fails")
+	return cmd
+}
+
+func checkLock(cmd *cobra.Command, a *app, locked, current lock.Lock) error {
+	if diffs := lock.Diff(locked, current); len(diffs) > 0 {
+		return &exitError{code: exitBlocking, err: fmt.Errorf("locked tests changed: %s", strings.Join(diffs, "; "))}
+	}
+	// Test output goes to stderr so stdout stays a one-line verdict.
+	a.log.Debug("running tests", "command", a.cfg.TestCommand)
+	tc := exec.CommandContext(cmd.Context(), a.cfg.TestCommand[0], a.cfg.TestCommand[1:]...)
+	tc.Stdout, tc.Stderr = cmd.ErrOrStderr(), cmd.ErrOrStderr()
+	if err := tc.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return &exitError{code: exitBlocking, err: fmt.Errorf("locked tests fail: %w", err)}
+		}
+		return &exitError{code: exitUsage, err: fmt.Errorf("running test_command: %w", err)}
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "locked tests unchanged and passing")
+	return nil
 }

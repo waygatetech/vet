@@ -16,3 +16,6 @@ critique:
 review:
   owner: brianseitel
   module: internal/review
+lock:
+  owner: brianseitel
+  module: internal/lock

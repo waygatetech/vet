@@ -140,12 +140,18 @@ func Triggered(r config.Reviewer, contractsChanged bool, tier int, files []strin
 	}
 	for _, f := range files {
 		for _, p := range w.Paths {
-			if match(strings.Split(p, "/"), strings.Split(f, "/")) {
+			if Match(p, f) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// Match reports whether slash-separated name matches pattern: path.Match per
+// segment, plus "**" matching zero or more segments.
+func Match(pattern, name string) bool {
+	return match(strings.Split(pattern, "/"), strings.Split(name, "/"))
 }
 
 // match is path.Match per segment, plus "**" matching zero or more segments.

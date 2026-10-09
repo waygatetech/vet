@@ -62,6 +62,36 @@ any reviewer fails the gate, and so does a failure from any reviewer. If no
 reviewer triggers, vet exits 2. `--tier` passes the ticket's review tier (from
 tix) for `min_tier` triggers. It defaults to 0.
 
+### lock
+
+```sh
+vet lock --plan plans/x-1.md
+vet lock --check --plan plans/x-1.md
+```
+
+`vet lock` freezes a plan's acceptance tests so the implementer can't redefine
+done by changing them. It's opt-in: set `test_command` in `.vet.yaml`. The plan
+names its tests in frontmatter with globs, where `**` spans directories:
+
+```yaml
+tests: ["internal/foo/foo_test.go"]
+```
+
+Once a separate agent has written the tests, `vet lock` hashes every tracked or
+untracked (not ignored) file that matches. It writes the hashes, the globs, and
+`HEAD` to `.vet/locks/<ticket>.json`. It refuses to overwrite an existing lock
+unless the plan's `tests` globs changed. Unlocking therefore means amending the
+plan, which the plan hook re-reviews.
+
+`--check` (run it from the tix done hook) exits 1 when:
+
+- the plan has tests but no lock;
+- a matching file was changed, added, or removed;
+- the plan's globs differ from the locked ones;
+- `test_command` fails.
+
+A plan without `tests` passes.
+
 ## Config
 
 vet reads `.vet.yaml` from the current directory if it exists. A file passed
@@ -79,6 +109,7 @@ reviewers:                      # agents for vet review; prompt is sent on stdin
       contracts_changed: true   # plan lists contracts_changed
       min_tier: 2               # vet review --tier >= 2
       paths: ["migrations/**"]  # diff touches a match; ** spans directories
+test_command: [go, test, ./...] # argv for vet lock --check; unset disables vet lock
 ```
 
 ## Exit codes

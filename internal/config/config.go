@@ -26,6 +26,9 @@ type Config struct {
 	// Reviewers are the agents vet review runs. Defaults to one reviewer,
 	// claude, running claude -p.
 	Reviewers []Reviewer `yaml:"reviewers"`
+	// TestCommand is the argv vet lock --check runs to prove the locked tests
+	// pass, e.g. [go, test, ./...]. Unset disables vet lock.
+	TestCommand []string `yaml:"test_command"`
 }
 
 // Reviewer is one agent vet review may run; the prompt goes on stdin.
