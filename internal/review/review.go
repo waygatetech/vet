@@ -8,8 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path"
+	"strconv"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
+	"github.com/waygatetech/vet/internal/config"
 	"github.com/waygatetech/vet/internal/critique"
 )
 
@@ -78,6 +83,89 @@ func Diff(ctx context.Context, base string) (string, error) {
 		b.Write(out)
 	}
 	return b.String(), nil
+}
+
+// ContractsChanged reports whether the plan's frontmatter lists any
+// contracts_changed entries.
+func ContractsChanged(plan []byte) (bool, error) {
+	fm, err := critique.Frontmatter(plan)
+	if err != nil {
+		return false, err
+	}
+	var meta struct {
+		ContractsChanged []string `yaml:"contracts_changed"`
+	}
+	if err := yaml.Unmarshal(fm, &meta); err != nil {
+		return false, fmt.Errorf("parsing plan frontmatter: %w", err)
+	}
+	return len(meta.ContractsChanged) > 0, nil
+}
+
+// Files returns the paths a diff touches, read from its "diff --git" headers.
+// For renames it returns the new path.
+func Files(diff string) []string {
+	var files []string
+	for line := range strings.Lines(diff) {
+		line = strings.TrimRight(line, "\n")
+		if !strings.HasPrefix(line, "diff --git ") {
+			continue
+		}
+		// git quotes paths with unusual characters: diff --git "a/x y" "b/x y"
+		if i := strings.LastIndex(line, ` "b/`); i >= 0 && strings.HasSuffix(line, `"`) {
+			if f, err := strconv.Unquote(line[i+1:]); err == nil {
+				files = append(files, strings.TrimPrefix(f, "b/"))
+			}
+			continue
+		}
+		if i := strings.LastIndex(line, " b/"); i >= 0 {
+			files = append(files, line[i+len(" b/"):])
+		}
+	}
+	return files
+}
+
+// Triggered reports whether reviewer r should run for this change. A
+// reviewer without a when always runs; otherwise any matching condition
+// triggers it.
+func Triggered(r config.Reviewer, contractsChanged bool, tier int, files []string) bool {
+	w := r.When
+	if w == nil {
+		return true
+	}
+	if w.ContractsChanged && contractsChanged {
+		return true
+	}
+	if w.MinTier > 0 && tier >= w.MinTier {
+		return true
+	}
+	for _, f := range files {
+		for _, p := range w.Paths {
+			if match(strings.Split(p, "/"), strings.Split(f, "/")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// match is path.Match per segment, plus "**" matching zero or more segments.
+func match(pattern, name []string) bool {
+	if len(pattern) == 0 {
+		return len(name) == 0
+	}
+	if pattern[0] == "**" {
+		for i := range len(name) + 1 {
+			if match(pattern[1:], name[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(name) == 0 {
+		return false
+	}
+	ok, _ := path.Match(pattern[0], name[0])
+	return ok && match(pattern[1:], name[1:])
 }
 
 func git(ctx context.Context, args ...string) (string, error) {

@@ -71,7 +71,7 @@ var itemID = regexp.MustCompile(`(?m)^## (C\d+) `)
 // Check returns the critique item IDs that the plan's critique_responses
 // frontmatter leaves unanswered or answers with an empty string.
 func Check(critique, plan []byte) ([]string, error) {
-	fm, err := frontmatter(plan)
+	fm, err := Frontmatter(plan)
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +91,9 @@ func Check(critique, plan []byte) ([]string, error) {
 	return missing, nil
 }
 
-// frontmatter returns the YAML between the leading "---" fences, or nil if
+// Frontmatter returns the YAML between the leading "---" fences, or nil if
 // the plan has none.
-func frontmatter(plan []byte) ([]byte, error) {
+func Frontmatter(plan []byte) ([]byte, error) {
 	plan = bytes.ReplaceAll(plan, []byte("\r\n"), []byte("\n"))
 	rest, ok := bytes.CutPrefix(plan, []byte("---\n"))
 	if !ok {

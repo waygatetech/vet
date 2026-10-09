@@ -15,12 +15,19 @@ func TestLoad(t *testing.T) {
 		explicit     bool
 		want         slog.Level
 		wantCmd      []string // nil means the default
-		wantReviewer []string // nil means the default
+		wantReviewer []string // first reviewer's command; nil means the default
 		wantErr      bool
 	}{
 		{name: "missing default file", want: slog.LevelInfo},
 		{name: "critic command", contents: ptr("critic_command: [codex, exec]\n"), wantCmd: []string{"codex", "exec"}},
-		{name: "reviewer command", contents: ptr("reviewer_command: [codex, exec]\n"), wantReviewer: []string{"codex", "exec"}},
+		{name: "reviewers", contents: ptr("reviewers:\n  - {name: codex, command: [codex, exec], when: {min_tier: 2}}\n"), wantReviewer: []string{"codex", "exec"}},
+		{name: "reviewer without name", contents: ptr("reviewers:\n  - {command: [codex]}\n"), wantErr: true},
+		{name: "reviewer without command", contents: ptr("reviewers:\n  - {name: codex}\n"), wantErr: true},
+		{name: "duplicate reviewer", contents: ptr("reviewers:\n  - {name: a, command: [x]}\n  - {name: a, command: [y]}\n"), wantErr: true},
+		{name: "unknown trigger", contents: ptr("reviewers:\n  - {name: a, command: [x], when: {tier: 2}}\n"), wantErr: true},
+		{name: "empty when", contents: ptr("reviewers:\n  - {name: a, command: [x], when: {}}\n"), wantErr: true},
+		{name: "bad path glob", contents: ptr("reviewers:\n  - {name: a, command: [x], when: {paths: [\"[\"]}}\n"), wantErr: true},
+		{name: "removed reviewer_command", contents: ptr("reviewer_command: [codex, exec]\n"), wantErr: true},
 		{name: "missing explicit file", explicit: true, wantErr: true},
 		{name: "empty file", contents: ptr(""), want: slog.LevelInfo},
 		{name: "log level", contents: ptr("log_level: debug\n"), want: slog.LevelDebug},
@@ -54,8 +61,8 @@ func TestLoad(t *testing.T) {
 			if wantReviewer == nil {
 				wantReviewer = []string{"claude", "-p"}
 			}
-			if err == nil && !slices.Equal(cfg.ReviewerCommand, wantReviewer) {
-				t.Errorf("ReviewerCommand = %v, want %v", cfg.ReviewerCommand, wantReviewer)
+			if err == nil && !slices.Equal(cfg.Reviewers[0].Command, wantReviewer) {
+				t.Errorf("Reviewers[0].Command = %v, want %v", cfg.Reviewers[0].Command, wantReviewer)
 			}
 		})
 	}

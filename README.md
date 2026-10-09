@@ -45,7 +45,7 @@ critique_responses:
 ### review
 
 ```sh
-vet review --plan plans/x-1.md [--base main] [--context why.txt ...] [--json]
+vet review --plan plans/x-1.md [--base main] [--tier 2] [--context why.txt ...] [--json]
 ```
 
 `vet review` gives a fresh-context reviewer only the plan, the diff, and any
@@ -56,6 +56,12 @@ working tree, plus untracked files. vet prints the findings, or the JSON report
 with `--json`, and exits 1 on any blocking finding. If the reviewer fails or
 returns malformed output, vet exits 3.
 
+Every reviewer in `reviewers` whose trigger matches runs concurrently with the
+same input. Each finding carries the `reviewer` that raised it. A block from
+any reviewer fails the gate, and so does a failure from any reviewer. If no
+reviewer triggers, vet exits 2. `--tier` passes the ticket's review tier (from
+tix) for `min_tier` triggers. It defaults to 0.
+
 ## Config
 
 vet reads `.vet.yaml` from the current directory if it exists. A file passed
@@ -64,7 +70,15 @@ with `--config` must exist. Unknown keys are an error.
 ```yaml
 log_level: info                 # debug | info | warn | error
 critic_command: [claude, -p]    # argv for vet critique; prompt is sent on stdin
-reviewer_command: [claude, -p]  # argv for vet review; prompt is sent on stdin
+reviewers:                      # agents for vet review; prompt is sent on stdin
+  - name: claude                # default when reviewers is empty
+    command: [claude, -p]
+  - name: codex                 # cross-model second opinion
+    command: [codex, exec]
+    when:                       # omit to always run; any one condition triggers
+      contracts_changed: true   # plan lists contracts_changed
+      min_tier: 2               # vet review --tier >= 2
+      paths: ["migrations/**"]  # diff touches a match; ** spans directories
 ```
 
 ## Exit codes

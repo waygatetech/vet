@@ -101,12 +101,23 @@ func TestReviewExitCodes(t *testing.T) {
 		return path
 	}
 	plan := write("plan.md", "---\nticket: x\n---\nbody\n")
+	entry := func(name, script, when string) string {
+		return "  - {name: " + name + ", command: [sh, -c, " + strconv.Quote(script) + "]" + when + "}\n"
+	}
 	reviewer := func(name, script string) string {
-		return write(name, "reviewer_command: [sh, -c, "+strconv.Quote(script)+"]\n")
+		return write(name, "reviewers:\n"+entry("solo", script, ""))
 	}
 	clean := reviewer("clean.yaml", `grep -q '+new' && echo '{"findings":[{"check":"scope","severity":"warning","file":"new.go","line":1,"message":"extra"}]}'`)
 	blocking := reviewer("blocking.yaml", `echo '{"findings":[{"check":"acceptance","severity":"blocking","acceptance_ref":"AC1","message":"untested"}]}'`)
 	malformed := reviewer("malformed.yaml", `echo LGTM`)
+	// Both reviewers must see the same prompt; second blocks only if it got the diff.
+	pair := write("pair.yaml", "reviewers:\n"+
+		entry("first", `echo '{"findings":[]}'`, "")+
+		entry("second", `grep -q '+new' && echo '{"findings":[{"check":"correctness","severity":"blocking","message":"bug"}]}'`, ", when: {paths: ['**/*.go']}"))
+	tiered := write("tiered.yaml", "reviewers:\n"+
+		entry("first", `echo '{"findings":[]}'`, "")+
+		entry("cross", `exit 1`, ", when: {min_tier: 2}"))
+	none := write("none.yaml", "reviewers:\n"+entry("cross", `exit 1`, ", when: {contracts_changed: true}"))
 
 	tests := []struct {
 		name       string
@@ -117,7 +128,11 @@ func TestReviewExitCodes(t *testing.T) {
 		{name: "missing plan flag", args: []string{"review"}, want: exitUsage},
 		{name: "missing plan file", args: []string{"--config", clean, "review", "--plan", filepath.Join(dir, "nope.md")}, want: exitUsage},
 		{name: "bad base", args: []string{"--config", clean, "review", "--plan", plan, "--base", "nope"}, want: exitUsage},
-		{name: "warnings pass", args: []string{"--config", clean, "review", "--plan", plan, "--context", plan}, want: exitPass, wantStdout: "[warning] scope new.go:1 extra"},
+		{name: "warnings pass", args: []string{"--config", clean, "review", "--plan", plan, "--context", plan}, want: exitPass, wantStdout: "[warning] scope new.go:1 extra (solo)"},
+		{name: "any reviewer blocks", args: []string{"--config", pair, "review", "--plan", plan, "--json"}, want: exitBlocking, wantStdout: `"reviewer":"second"`},
+		{name: "untriggered reviewer skipped", args: []string{"--config", tiered, "review", "--plan", plan, "--tier", "1"}, want: exitPass},
+		{name: "triggered reviewer fails closed", args: []string{"--config", tiered, "review", "--plan", plan, "--tier", "2"}, want: exitAgent},
+		{name: "no reviewer triggered", args: []string{"--config", none, "review", "--plan", plan}, want: exitUsage},
 		{name: "blocking", args: []string{"--config", blocking, "review", "--plan", plan}, want: exitBlocking, wantStdout: "[blocking] acceptance"},
 		{name: "json", args: []string{"--config", blocking, "review", "--plan", plan, "--json"}, want: exitBlocking, wantStdout: `"acceptance_ref":"AC1"`},
 		{name: "malformed fails closed", args: []string{"--config", malformed, "review", "--plan", plan}, want: exitAgent},

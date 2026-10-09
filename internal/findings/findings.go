@@ -45,6 +45,9 @@ type Finding struct {
 	// AcceptanceRef names the acceptance criterion a review finding relates to.
 	AcceptanceRef string `json:"acceptance_ref,omitempty"`
 	Message       string `json:"message"`
+	// Reviewer names the configured reviewer that raised a review finding.
+	// vet sets it; agent output cannot.
+	Reviewer string `json:"reviewer,omitempty"`
 }
 
 // Report is the top-level JSON document vet emits.

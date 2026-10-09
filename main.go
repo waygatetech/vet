@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -205,6 +206,7 @@ func newReviewCmd(a *app) *cobra.Command {
 		plan, base string
 		contexts   []string
 		asJSON     bool
+		tier       int
 	)
 	cmd := &cobra.Command{
 		Use:   "review --plan <plan.md>",
@@ -226,11 +228,45 @@ func newReviewCmd(a *app) *cobra.Command {
 			if err != nil {
 				return &exitError{code: exitUsage, err: err}
 			}
-
-			a.log.Debug("running reviewer", "command", a.cfg.ReviewerCommand)
-			report, err := findings.Run(cmd.Context(), a.cfg.ReviewerCommand, review.Prompt(planText, diff, files))
+			contracts, err := review.ContractsChanged([]byte(planText))
 			if err != nil {
+				return &exitError{code: exitUsage, err: err}
+			}
+			changed := review.Files(diff)
+			var reviewers []config.Reviewer
+			for _, r := range a.cfg.Reviewers {
+				if review.Triggered(r, contracts, tier, changed) {
+					reviewers = append(reviewers, r)
+				}
+			}
+			if len(reviewers) == 0 {
+				return &exitError{code: exitUsage, err: errors.New("no reviewer triggered; give at least one reviewer no when")}
+			}
+
+			// Every reviewer gets the same prompt; any failure fails the gate closed.
+			prompt := review.Prompt(planText, diff, files)
+			reports := make([]findings.Report, len(reviewers))
+			errs := make([]error, len(reviewers))
+			var wg sync.WaitGroup
+			for i, r := range reviewers {
+				a.log.Debug("running reviewer", "name", r.Name, "command", r.Command)
+				wg.Go(func() {
+					reports[i], errs[i] = findings.Run(cmd.Context(), r.Command, prompt)
+					if errs[i] != nil {
+						errs[i] = fmt.Errorf("reviewer %s: %w", r.Name, errs[i])
+					}
+				})
+			}
+			wg.Wait()
+			if err := errors.Join(errs...); err != nil {
 				return &exitError{code: exitAgent, err: err}
+			}
+			var report findings.Report
+			for i, r := range reports {
+				for _, f := range r.Findings {
+					f.Reviewer = reviewers[i].Name
+					report.Findings = append(report.Findings, f)
+				}
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
@@ -243,7 +279,7 @@ func newReviewCmd(a *app) *cobra.Command {
 					if f.Line > 0 {
 						loc = fmt.Sprintf("%s:%d", f.File, f.Line)
 					}
-					fmt.Fprintf(out, "[%s] %s %s %s\n", f.Severity, f.Check, loc, strings.TrimSpace(f.Message))
+					fmt.Fprintf(out, "[%s] %s %s %s (%s)\n", f.Severity, f.Check, loc, strings.TrimSpace(f.Message), f.Reviewer)
 				}
 			}
 			if report.Blocking() {
@@ -256,5 +292,6 @@ func newReviewCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&base, "base", "main", "ref whose merge base with HEAD the diff starts from")
 	cmd.Flags().StringArrayVar(&contexts, "context", nil, "extra context file for the reviewer, e.g. human rulings (repeatable)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "write the findings JSON report to stdout")
+	cmd.Flags().IntVar(&tier, "tier", 0, "the ticket's review tier, for reviewers with when.min_tier")
 	return cmd
 }
