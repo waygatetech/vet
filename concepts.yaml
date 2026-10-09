@@ -10,3 +10,6 @@ config:
 findings:
   owner: brianseitel
   module: internal/findings
+critique:
+  owner: brianseitel
+  module: internal/critique

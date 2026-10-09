@@ -8,10 +8,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/waygatetech/vet/internal/config"
+	"github.com/waygatetech/vet/internal/critique"
 )
 
 // Set by GoReleaser via -ldflags.
@@ -92,5 +94,95 @@ func newRootCmd(stderr io.Writer) *cobra.Command {
 		},
 	}
 	cmd.PersistentFlags().StringVar(&configPath, "config", config.DefaultPath, "path to config file")
+	cmd.AddCommand(newCritiqueCmd(&a))
 	return cmd
+}
+
+func newCritiqueCmd(a *app) *cobra.Command {
+	var (
+		check    bool
+		ticket   string
+		contexts []string
+	)
+	cmd := &cobra.Command{
+		Use:   "critique <plan.md>",
+		Short: "Run a fresh-context critic over a plan, or --check that every item is answered",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			plan := args[0]
+			out := strings.TrimSuffix(plan, ".md") + ".critique.md"
+			if check {
+				return checkCritique(cmd, plan, out)
+			}
+			if ticket == "" {
+				return &exitError{code: exitUsage, err: errors.New("--ticket is required unless --check is set")}
+			}
+			return runCritique(cmd, a, plan, ticket, contexts, out)
+		},
+	}
+	cmd.Flags().BoolVar(&check, "check", false, "exit 1 unless every critique item has a critique_responses entry")
+	cmd.Flags().StringVar(&ticket, "ticket", "", "file containing the ticket text")
+	cmd.Flags().StringArrayVar(&contexts, "context", nil, "extra context file for the critic (repeatable)")
+	return cmd
+}
+
+func runCritique(cmd *cobra.Command, a *app, plan, ticket string, contexts []string, out string) error {
+	read := func(path string) (string, error) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", &exitError{code: exitUsage, err: fmt.Errorf("reading input: %w", err)}
+		}
+		return string(b), nil
+	}
+	planText, err := read(plan)
+	if err != nil {
+		return err
+	}
+	ticketText, err := read(ticket)
+	if err != nil {
+		return err
+	}
+	concepts, err := read("concepts.yaml")
+	if err != nil {
+		return err
+	}
+	var files []critique.File
+	for _, path := range contexts {
+		text, err := read(path)
+		if err != nil {
+			return err
+		}
+		files = append(files, critique.File{Name: path, Content: text})
+	}
+
+	a.log.Debug("running critic", "command", a.cfg.CriticCommand)
+	report, err := critique.Run(cmd.Context(), a.cfg.CriticCommand, critique.Prompt(ticketText, planText, concepts, files))
+	if err != nil {
+		return &exitError{code: exitAgent, err: err}
+	}
+	if err := os.WriteFile(out, critique.Render(report), 0o644); err != nil {
+		return &exitError{code: exitAgent, err: fmt.Errorf("writing critique: %w", err)}
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), out)
+	return nil
+}
+
+func checkCritique(cmd *cobra.Command, plan, out string) error {
+	critiqueText, err := os.ReadFile(out)
+	if err != nil {
+		return &exitError{code: exitUsage, err: fmt.Errorf("reading critique (run vet critique first): %w", err)}
+	}
+	planText, err := os.ReadFile(plan)
+	if err != nil {
+		return &exitError{code: exitUsage, err: fmt.Errorf("reading plan: %w", err)}
+	}
+	missing, err := critique.Check(critiqueText, planText)
+	if err != nil {
+		return &exitError{code: exitUsage, err: err}
+	}
+	if len(missing) > 0 {
+		return &exitError{code: exitBlocking, err: fmt.Errorf("critique items without critique_responses: %s", strings.Join(missing, ", "))}
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "all critique items answered")
+	return nil
 }

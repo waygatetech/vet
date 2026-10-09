@@ -19,13 +19,37 @@ vet --version
 vet --config path/to/.vet.yaml ...
 ```
 
+### critique
+
+```sh
+vet critique plans/x-1.md --ticket ticket.txt [--context why.txt ...]
+vet critique --check plans/x-1.md
+```
+
+`vet critique` gives a fresh-context critic only the ticket text, the plan,
+`./concepts.yaml`, and any `--context` files. It never sees the planning
+transcript. The critic looks for failure modes, missing or untestable acceptance
+criteria, overlap with existing concepts, and undeclared contract changes.
+vet writes the result to `plans/x-1.critique.md`, with one `## C<n>` item per
+finding. If the critic fails or returns malformed output, vet exits 3.
+
+`--check` exits 1 unless every item has a non-empty answer in the plan's
+frontmatter:
+
+```yaml
+critique_responses:
+  C1: "Added acceptance test for empty input."
+  C2: "Accepted risk: single writer only."
+```
+
 ## Config
 
 vet reads `.vet.yaml` from the current directory if it exists. A file passed
 with `--config` must exist. Unknown keys are an error.
 
 ```yaml
-log_level: info   # debug | info | warn | error
+log_level: info                 # debug | info | warn | error
+critic_command: [claude, -p]    # argv for vet critique; prompt is sent on stdin
 ```
 
 ## Exit codes

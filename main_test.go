@@ -40,3 +40,45 @@ func TestRunExitCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestCritiqueExitCodes(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, contents string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	report := write("report.json", `{"findings":[{"check":"acceptance","severity":"blocking","message":"no tests"}]}`)
+	good := write("good.yaml", "critic_command: [cat, "+report+"]\n")
+	failing := write("fail.yaml", "critic_command: [sh, -c, \"exit 1\"]\n")
+	ticket := write("ticket.txt", "do the thing\n")
+	unanswered := write("plan.md", "---\nticket: x\n---\nbody\n")
+	answered := write("answered.md", "---\ncritique_responses:\n  C1: added tests\n---\n")
+	write("answered.critique.md", "## C1 [blocking] acceptance\n")
+
+	// Steps run in order: the critique file written by "writes critique" feeds the --check steps.
+	tests := []struct {
+		name string
+		args []string
+		want int
+	}{
+		{name: "check before critique", args: []string{"critique", "--check", unanswered}, want: exitUsage},
+		{name: "missing ticket flag", args: []string{"critique", unanswered}, want: exitUsage},
+		{name: "missing ticket file", args: []string{"--config", good, "critique", "--ticket", filepath.Join(dir, "nope"), unanswered}, want: exitUsage},
+		{name: "critic fails", args: []string{"--config", failing, "critique", "--ticket", ticket, unanswered}, want: exitAgent},
+		{name: "writes critique", args: []string{"--config", good, "critique", "--ticket", ticket, "--context", ticket, unanswered}, want: exitPass},
+		{name: "check unanswered", args: []string{"critique", "--check", unanswered}, want: exitBlocking},
+		{name: "check answered", args: []string{"critique", "--check", answered}, want: exitPass},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(tt.args, &stdout, &stderr); got != tt.want {
+				t.Fatalf("run(%v) = %d, want %d; stderr: %s", tt.args, got, tt.want, stderr.String())
+			}
+		})
+	}
+}
