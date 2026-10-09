@@ -1,0 +1,12 @@
+# Concepts this repo defines. tix plan rejects plan concepts missing here
+# unless the plan lists them in new_concepts.
+
+cli:
+  owner: brianseitel
+  module: .
+config:
+  owner: brianseitel
+  module: internal/config
+findings:
+  owner: brianseitel
+  module: internal/findings
