@@ -153,10 +153,14 @@ func TestReviewExitCodes(t *testing.T) {
 func TestLockExitCodes(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	cmd := exec.Command("sh", "-c", "git init -q -b main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m base")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("setting up repo: %v: %s", err, out)
+	sh := func(script string) {
+		t.Helper()
+		if out, err := exec.Command("sh", "-c", script).CombinedOutput(); err != nil {
+			t.Fatalf("running %q: %v: %s", script, err, out)
+		}
 	}
+	sh("git init -q -b main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m base")
+	commit := func() { sh("git add -A && git -c user.name=t -c user.email=t@t commit -q -m lock") }
 	write := func(name, contents string) string {
 		t.Helper()
 		path := filepath.Join(dir, name)
@@ -171,30 +175,41 @@ func TestLockExitCodes(t *testing.T) {
 	amended := write("amended.md", "---\nticket: x\ntests: ['*_test.go']\n---\n")
 	untested := write("untested.md", "---\nticket: x\n---\n")
 	empty := write("empty.md", "---\nticket: y\ntests: [none_test.go]\n---\n")
+	lockFile := filepath.Join(".vet", "locks", "x.json")
+	check := func(plan string) []string { return []string{"--config", cfg, "lock", "--check", "--plan", plan} }
 
-	// Steps run in order: each builds on the lock and files left by earlier steps.
+	// Steps run in order: each builds on the lock, commits, and files left by earlier steps.
 	tests := []struct {
 		name       string
 		setup      func()
 		args       []string
 		want       int
 		wantStdout string
+		wantStderr string
 	}{
 		{name: "missing plan flag", args: []string{"lock"}, want: exitUsage},
 		{name: "no tests", args: []string{"--config", cfg, "lock", "--plan", untested}, want: exitUsage},
-		{name: "check no tests", args: []string{"--config", cfg, "lock", "--check", "--plan", untested}, want: exitPass, wantStdout: "no locked tests"},
+		{name: "check no tests", args: check(untested), want: exitPass, wantStdout: "no locked tests"},
 		{name: "no test_command", args: []string{"lock", "--plan", plan}, want: exitUsage},
-		{name: "check before lock", args: []string{"--config", cfg, "lock", "--check", "--plan", plan}, want: exitBlocking},
+		{name: "check before lock", args: check(plan), want: exitBlocking, wantStderr: "not locked"},
 		{name: "globs match nothing", args: []string{"--config", cfg, "lock", "--plan", empty}, want: exitUsage},
-		{name: "lock", args: []string{"--config", cfg, "lock", "--plan", plan}, want: exitPass, wantStdout: filepath.Join(".vet", "locks", "x.json")},
+		{name: "lock", args: []string{"--config", cfg, "lock", "--plan", plan}, want: exitPass, wantStdout: lockFile},
 		{name: "relock same globs", args: []string{"--config", cfg, "lock", "--plan", plan}, want: exitBlocking},
-		{name: "tests fail", args: []string{"--config", cfg, "lock", "--check", "--plan", plan}, want: exitBlocking},
-		{name: "tests pass", setup: func() { write("impl.go", "package a\n") }, args: []string{"--config", cfg, "lock", "--check", "--plan", plan}, want: exitPass, wantStdout: "unchanged and passing"},
-		{name: "file outside globs ignored", setup: func() { write("b_test.go", "package a\n") }, args: []string{"--config", cfg, "lock", "--check", "--plan", plan}, want: exitPass},
-		{name: "test edited", setup: func() { write("a_test.go", "package a // weakened\n") }, args: []string{"--config", cfg, "lock", "--check", "--plan", plan}, want: exitBlocking},
-		{name: "plan globs amended without relock", args: []string{"--config", cfg, "lock", "--check", "--plan", amended}, want: exitBlocking},
+		{name: "uncommitted lock", args: check(plan), want: exitBlocking, wantStderr: "not committed"},
+		{name: "bad base", setup: commit, args: append(check(plan), "--base", "nope"), want: exitUsage},
+		{name: "tests fail", args: check(plan), want: exitBlocking, wantStderr: "locked tests fail"},
+		{name: "tests pass", setup: func() { write("impl.go", "package a\n") }, args: check(plan), want: exitPass, wantStdout: "unchanged and passing"},
+		{name: "file outside globs ignored", setup: func() { write("b_test.go", "package a\n") }, args: check(plan), want: exitPass},
+		{name: "test edited", setup: func() { write("a_test.go", "package a // weakened\n") }, args: check(plan), want: exitBlocking, wantStderr: "changed: a_test.go"},
+		{name: "delete and relock", setup: func() {
+			if err := os.Remove(lockFile); err != nil {
+				t.Fatal(err)
+			}
+		}, args: []string{"--config", cfg, "lock", "--plan", plan}, want: exitPass},
+		{name: "relocked edit still blocks", args: check(plan), want: exitBlocking, wantStderr: "changed: a_test.go"},
+		{name: "plan globs amended without relock", args: check(amended), want: exitBlocking, wantStderr: "tests globs changed"},
 		{name: "relock after amendment", args: []string{"--config", cfg, "lock", "--plan", amended}, want: exitPass},
-		{name: "check after relock", args: []string{"--config", cfg, "lock", "--check", "--plan", amended}, want: exitPass},
+		{name: "check after relock", args: check(amended), want: exitPass},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -207,6 +222,9 @@ func TestLockExitCodes(t *testing.T) {
 			}
 			if !strings.Contains(stdout.String(), tt.wantStdout) {
 				t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tt.wantStdout)
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantStderr)
 			}
 		})
 	}

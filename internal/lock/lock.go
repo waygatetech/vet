@@ -98,6 +98,28 @@ func Read(path string) (Lock, error) {
 	return l, nil
 }
 
+// Committed loads the lock at path as committed at merge-base(base, HEAD).
+// The bool is false if the lock is not in that commit.
+func Committed(ctx context.Context, base, path string) (Lock, bool, error) {
+	var l Lock
+	mb, err := git(ctx, "merge-base", base, "HEAD")
+	if err != nil {
+		return l, false, err
+	}
+	spec := strings.TrimSpace(mb) + ":" + filepath.ToSlash(path)
+	if ls, err := git(ctx, "ls-tree", "--name-only", strings.TrimSpace(mb), "--", filepath.ToSlash(path)); err != nil || ls == "" {
+		return l, false, err
+	}
+	data, err := git(ctx, "show", spec)
+	if err != nil {
+		return l, false, err
+	}
+	if err := json.Unmarshal([]byte(data), &l); err != nil {
+		return l, false, fmt.Errorf("parsing committed lock %s: %w", spec, err)
+	}
+	return l, true, nil
+}
+
 // Write saves a lock file, creating its directory.
 func Write(path string, l Lock) error {
 	data, err := json.MarshalIndent(l, "", "  ")

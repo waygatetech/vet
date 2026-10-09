@@ -302,8 +302,8 @@ func newReviewCmd(a *app) *cobra.Command {
 
 func newLockCmd(a *app) *cobra.Command {
 	var (
-		plan  string
-		check bool
+		plan, base string
+		check      bool
 	)
 	cmd := &cobra.Command{
 		Use:   "lock --plan <plan.md>",
@@ -342,10 +342,25 @@ func newLockCmd(a *app) *cobra.Command {
 				return &exitError{code: exitUsage, err: err}
 			}
 			if check {
-				if missing {
-					return &exitError{code: exitBlocking, err: fmt.Errorf("tests not locked; run vet lock --plan %s", plan)}
+				// Anchor on the committed lock: the working-tree one can be deleted and re-locked.
+				anchor, committed, err := lock.Committed(cmd.Context(), base, path)
+				if err != nil {
+					return &exitError{code: exitUsage, err: err}
 				}
-				return checkLock(cmd, a, locked, current)
+				notLocked := &exitError{code: exitBlocking, err: fmt.Errorf("tests not locked; run vet lock --plan %s", plan)}
+				switch {
+				case !committed && missing:
+					return notLocked
+				case !committed:
+					return &exitError{code: exitBlocking, err: fmt.Errorf("%s is not committed at the merge base with %s; commit the tests and lock before implementing", path, base)}
+				case !slices.Equal(anchor.Tests, tests):
+					// The plan's tests were amended, which tix re-reviews; trust the re-lock.
+					if missing {
+						return notLocked
+					}
+					anchor = locked
+				}
+				return checkLock(cmd, a, anchor, current)
 			}
 
 			// Re-locking needs a plan amendment, which the plan hook re-reviews.
@@ -364,6 +379,7 @@ func newLockCmd(a *app) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&plan, "plan", "", "plan file whose tests globs to lock (required)")
 	cmd.Flags().BoolVar(&check, "check", false, "exit 1 if locked tests changed or test_command fails")
+	cmd.Flags().StringVar(&base, "base", "main", "with --check, ref whose merge base with HEAD holds the committed lock")
 	return cmd
 }
 

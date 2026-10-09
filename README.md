@@ -79,13 +79,18 @@ tests: ["internal/foo/foo_test.go"]
 
 Once a separate agent has written the tests, `vet lock` hashes every tracked or
 untracked (not ignored) file that matches. It writes the hashes, the globs, and
-`HEAD` to `.vet/locks/<ticket>.json`. It refuses to overwrite an existing lock
-unless the plan's `tests` globs changed. Unlocking therefore means amending the
-plan, which the plan hook re-reviews.
+`HEAD` to `.vet/locks/<ticket>.json`. Commit the tests and the lock before
+implementing. It refuses to overwrite an existing lock unless the plan's
+`tests` globs changed. Unlocking therefore means amending the plan, which the
+plan hook re-reviews.
 
-`--check` (run it from the tix done hook) exits 1 when:
+`--check [--base main]` (run it from the tix done hook) ignores the
+working-tree lock and compares against the one committed at the merge base of
+`--base` and `HEAD`, so deleting or rewriting the lock doesn't help. The
+exception is a plan whose `tests` globs differ from the committed lock's (an
+amendment): then it uses the re-lock. It exits 1 when:
 
-- the plan has tests but no lock;
+- the plan has tests but no lock is committed at the merge base;
 - a matching file was changed, added, or removed;
 - the plan's globs differ from the locked ones;
 - `test_command` fails.
