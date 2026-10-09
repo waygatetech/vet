@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -76,6 +77,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return exitUsage
 }
 
+// versionString falls back to the module version for builds without
+// ldflags, such as go install github.com/waygatetech/vet@v0.1.0.
+func versionString() string {
+	if info, ok := debug.ReadBuildInfo(); ok && version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return fmt.Sprintf("%s (commit %s, built %s)", version, commit, date)
+}
+
 func newRootCmd(stderr io.Writer) *cobra.Command {
 	var (
 		a          app
@@ -84,7 +94,7 @@ func newRootCmd(stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "vet",
 		Short:         "Run the checks that gate plans and diffs (not go vet)",
-		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
+		Version:       versionString(),
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

@@ -6,10 +6,57 @@ It knows nothing about ticket state: tix hooks call it and record its output.
 > **Not `go vet`.** This is a standalone binary that happens to share the word.
 > It does not wrap or replace the Go toolchain's `go vet`.
 
+vet is the companion to [tix](https://github.com/waygatetech/tix), a ticket
+tracker for agent-driven work. In tix, each ticket gets a plan file
+(`plans/<ticket>.md`), and hooks run at plan and done time. vet is what those
+hooks call. Its [exit codes](#exit-codes) tell the hook whether to pass or
+block. vet also runs on its own: any script or CI step can call it and use the
+exit code.
+
+## Requirements
+
+- `git`: `review` and `lock` read the diff and the merge base from git.
+- An agent CLI that reads a prompt on stdin and prints its answer. The default
+  is `claude -p` ([Claude Code](https://claude.com/claude-code)). Use any other
+  CLI by setting `critic_command` and `reviewers` in [`.vet.yaml`](#config).
+
 ## Install
 
 ```sh
 go install github.com/waygatetech/vet@latest
+```
+
+Or download a binary from [Releases](https://github.com/waygatetech/vet/releases).
+
+## Example
+
+A plan is Markdown with YAML frontmatter:
+
+```markdown
+---
+ticket: x-1
+tests: ["internal/foo/foo_test.go"]
+contracts_changed: []
+---
+# Add Foo
+
+Acceptance: `Foo("")` returns an error.
+```
+
+Then a ticket goes through these steps:
+
+```sh
+vet critique plans/x-1.md --ticket ticket.txt  # writes plans/x-1.critique.md
+# answer each C<n> under critique_responses in the plan, then:
+vet critique --check plans/x-1.md
+
+# a separate agent writes internal/foo/foo_test.go, then:
+vet lock --plan plans/x-1.md
+git add internal/foo/foo_test.go .vet/locks/x-1.json && git commit -m "Lock x-1 tests"
+
+# implement, then:
+vet review --plan plans/x-1.md
+vet lock --check --plan plans/x-1.md
 ```
 
 ## Usage
