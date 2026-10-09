@@ -13,6 +13,11 @@ hooks call. Its [exit codes](#exit-codes) tell the hook whether to pass or
 block. vet also runs on its own: any script or CI step can call it and use the
 exit code.
 
+This repo is built with vet and tix. The files in [`plans/`](plans) are the
+real plan files for its tickets, so they work as examples, and
+[`concepts.yaml`](concepts.yaml) is the concept registry that `vet critique`
+reads.
+
 ## Requirements
 
 - `git`: `review` and `lock` read the diff and the merge base from git.
