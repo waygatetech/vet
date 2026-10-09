@@ -1,42 +1,12 @@
 package critique
 
 import (
-	"context"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/waygatetech/vet/internal/findings"
 )
-
-func TestRun(t *testing.T) {
-	tests := []struct {
-		name    string
-		script  string
-		want    int // number of findings
-		wantErr bool
-	}{
-		{name: "report", script: `echo '{"findings":[{"check":"acceptance","severity":"blocking","message":"m"}]}'`, want: 1},
-		{name: "fenced", script: "printf '```json\\n{\"findings\":[]}\\n```\\n'", want: 0},
-		{name: "reads prompt", script: `grep -q '===== PLAN =====' && echo '{"findings":[]}'`, want: 0},
-		{name: "not json", script: `echo looks good to me`, wantErr: true},
-		{name: "missing findings key", script: `echo '{}'`, wantErr: true},
-		{name: "bad severity", script: `echo '{"findings":[{"check":"x","severity":"meh","message":"m"}]}'`, wantErr: true},
-		{name: "nonzero exit", script: `echo '{"findings":[]}'; exit 1`, wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			prompt := Prompt("ticket", "plan", "cli: {}", nil)
-			r, err := Run(context.Background(), []string{"sh", "-c", tt.script}, prompt)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("Run() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err == nil && len(r.Findings) != tt.want {
-				t.Errorf("got %d findings, want %d", len(r.Findings), tt.want)
-			}
-		})
-	}
-}
 
 func TestCheck(t *testing.T) {
 	critique := Render(findings.Report{Findings: []findings.Finding{

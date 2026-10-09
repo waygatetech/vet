@@ -22,6 +22,9 @@ type Config struct {
 	// CriticCommand is the argv vet critique runs; the prompt goes on stdin.
 	// Defaults to claude -p.
 	CriticCommand []string `yaml:"critic_command"`
+	// ReviewerCommand is the argv vet review runs; the prompt goes on stdin.
+	// Defaults to claude -p.
+	ReviewerCommand []string `yaml:"reviewer_command"`
 }
 
 // Load reads the config at path. A missing file yields defaults unless the
@@ -43,6 +46,9 @@ func Load(path string, explicit bool) (Config, error) {
 	}
 	if len(cfg.CriticCommand) == 0 {
 		cfg.CriticCommand = []string{"claude", "-p"}
+	}
+	if len(cfg.ReviewerCommand) == 0 {
+		cfg.ReviewerCommand = []string{"claude", "-p"}
 	}
 	return cfg, nil
 }

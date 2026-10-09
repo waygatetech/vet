@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/waygatetech/vet/internal/config"
 	"github.com/waygatetech/vet/internal/critique"
+	"github.com/waygatetech/vet/internal/findings"
+	"github.com/waygatetech/vet/internal/review"
 )
 
 // Set by GoReleaser via -ldflags.
@@ -94,7 +97,7 @@ func newRootCmd(stderr io.Writer) *cobra.Command {
 		},
 	}
 	cmd.PersistentFlags().StringVar(&configPath, "config", config.DefaultPath, "path to config file")
-	cmd.AddCommand(newCritiqueCmd(&a))
+	cmd.AddCommand(newCritiqueCmd(&a), newReviewCmd(&a))
 	return cmd
 }
 
@@ -127,13 +130,6 @@ func newCritiqueCmd(a *app) *cobra.Command {
 }
 
 func runCritique(cmd *cobra.Command, a *app, plan, ticket string, contexts []string, out string) error {
-	read := func(path string) (string, error) {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return "", &exitError{code: exitUsage, err: fmt.Errorf("reading input: %w", err)}
-		}
-		return string(b), nil
-	}
 	planText, err := read(plan)
 	if err != nil {
 		return err
@@ -146,17 +142,13 @@ func runCritique(cmd *cobra.Command, a *app, plan, ticket string, contexts []str
 	if err != nil {
 		return err
 	}
-	var files []critique.File
-	for _, path := range contexts {
-		text, err := read(path)
-		if err != nil {
-			return err
-		}
-		files = append(files, critique.File{Name: path, Content: text})
+	files, err := readContexts(contexts)
+	if err != nil {
+		return err
 	}
 
 	a.log.Debug("running critic", "command", a.cfg.CriticCommand)
-	report, err := critique.Run(cmd.Context(), a.cfg.CriticCommand, critique.Prompt(ticketText, planText, concepts, files))
+	report, err := findings.Run(cmd.Context(), a.cfg.CriticCommand, critique.Prompt(ticketText, planText, concepts, files))
 	if err != nil {
 		return &exitError{code: exitAgent, err: err}
 	}
@@ -185,4 +177,84 @@ func checkCritique(cmd *cobra.Command, plan, out string) error {
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "all critique items answered")
 	return nil
+}
+
+// read returns a file's contents; failures are usage errors.
+func read(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", &exitError{code: exitUsage, err: fmt.Errorf("reading input: %w", err)}
+	}
+	return string(b), nil
+}
+
+func readContexts(paths []string) ([]critique.File, error) {
+	var files []critique.File
+	for _, path := range paths {
+		text, err := read(path)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, critique.File{Name: path, Content: text})
+	}
+	return files, nil
+}
+
+func newReviewCmd(a *app) *cobra.Command {
+	var (
+		plan, base string
+		contexts   []string
+		asJSON     bool
+	)
+	cmd := &cobra.Command{
+		Use:   "review --plan <plan.md>",
+		Short: "Run a fresh-context reviewer over a plan and its diff; exit 1 on blocking findings",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if plan == "" {
+				return &exitError{code: exitUsage, err: errors.New("--plan is required")}
+			}
+			planText, err := read(plan)
+			if err != nil {
+				return err
+			}
+			files, err := readContexts(contexts)
+			if err != nil {
+				return err
+			}
+			diff, err := review.Diff(cmd.Context(), base)
+			if err != nil {
+				return &exitError{code: exitUsage, err: err}
+			}
+
+			a.log.Debug("running reviewer", "command", a.cfg.ReviewerCommand)
+			report, err := findings.Run(cmd.Context(), a.cfg.ReviewerCommand, review.Prompt(planText, diff, files))
+			if err != nil {
+				return &exitError{code: exitAgent, err: err}
+			}
+			out := cmd.OutOrStdout()
+			if asJSON {
+				if err := json.NewEncoder(out).Encode(report); err != nil {
+					return &exitError{code: exitAgent, err: fmt.Errorf("writing report: %w", err)}
+				}
+			} else {
+				for _, f := range report.Findings {
+					loc := f.File
+					if f.Line > 0 {
+						loc = fmt.Sprintf("%s:%d", f.File, f.Line)
+					}
+					fmt.Fprintf(out, "[%s] %s %s %s\n", f.Severity, f.Check, loc, strings.TrimSpace(f.Message))
+				}
+			}
+			if report.Blocking() {
+				return &exitError{code: exitBlocking, err: errors.New("review raised blocking findings")}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&plan, "plan", "", "plan file the diff implements (required)")
+	cmd.Flags().StringVar(&base, "base", "main", "ref whose merge base with HEAD the diff starts from")
+	cmd.Flags().StringArrayVar(&contexts, "context", nil, "extra context file for the reviewer, e.g. human rulings (repeatable)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "write the findings JSON report to stdout")
+	return cmd
 }

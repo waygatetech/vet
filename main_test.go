@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -78,6 +80,56 @@ func TestCritiqueExitCodes(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if got := run(tt.args, &stdout, &stderr); got != tt.want {
 				t.Fatalf("run(%v) = %d, want %d; stderr: %s", tt.args, got, tt.want, stderr.String())
+			}
+		})
+	}
+}
+
+func TestReviewExitCodes(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	cmd := exec.Command("sh", "-c", "git init -q -b main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m base && echo new > new.go")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("setting up repo: %v: %s", err, out)
+	}
+	write := func(name, contents string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	plan := write("plan.md", "---\nticket: x\n---\nbody\n")
+	reviewer := func(name, script string) string {
+		return write(name, "reviewer_command: [sh, -c, "+strconv.Quote(script)+"]\n")
+	}
+	clean := reviewer("clean.yaml", `grep -q '+new' && echo '{"findings":[{"check":"scope","severity":"warning","file":"new.go","line":1,"message":"extra"}]}'`)
+	blocking := reviewer("blocking.yaml", `echo '{"findings":[{"check":"acceptance","severity":"blocking","acceptance_ref":"AC1","message":"untested"}]}'`)
+	malformed := reviewer("malformed.yaml", `echo LGTM`)
+
+	tests := []struct {
+		name       string
+		args       []string
+		want       int
+		wantStdout string
+	}{
+		{name: "missing plan flag", args: []string{"review"}, want: exitUsage},
+		{name: "missing plan file", args: []string{"--config", clean, "review", "--plan", filepath.Join(dir, "nope.md")}, want: exitUsage},
+		{name: "bad base", args: []string{"--config", clean, "review", "--plan", plan, "--base", "nope"}, want: exitUsage},
+		{name: "warnings pass", args: []string{"--config", clean, "review", "--plan", plan, "--context", plan}, want: exitPass, wantStdout: "[warning] scope new.go:1 extra"},
+		{name: "blocking", args: []string{"--config", blocking, "review", "--plan", plan}, want: exitBlocking, wantStdout: "[blocking] acceptance"},
+		{name: "json", args: []string{"--config", blocking, "review", "--plan", plan, "--json"}, want: exitBlocking, wantStdout: `"acceptance_ref":"AC1"`},
+		{name: "malformed fails closed", args: []string{"--config", malformed, "review", "--plan", plan}, want: exitAgent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(tt.args, &stdout, &stderr); got != tt.want {
+				t.Fatalf("run(%v) = %d, want %d; stderr: %s", tt.args, got, tt.want, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), tt.wantStdout) {
+				t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tt.wantStdout)
 			}
 		})
 	}

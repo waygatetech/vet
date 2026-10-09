@@ -10,15 +10,17 @@ import (
 
 func TestLoad(t *testing.T) {
 	tests := []struct {
-		name     string
-		contents *string // nil means the file does not exist
-		explicit bool
-		want     slog.Level
-		wantCmd  []string // nil means the default
-		wantErr  bool
+		name         string
+		contents     *string // nil means the file does not exist
+		explicit     bool
+		want         slog.Level
+		wantCmd      []string // nil means the default
+		wantReviewer []string // nil means the default
+		wantErr      bool
 	}{
 		{name: "missing default file", want: slog.LevelInfo},
 		{name: "critic command", contents: ptr("critic_command: [codex, exec]\n"), wantCmd: []string{"codex", "exec"}},
+		{name: "reviewer command", contents: ptr("reviewer_command: [codex, exec]\n"), wantReviewer: []string{"codex", "exec"}},
 		{name: "missing explicit file", explicit: true, wantErr: true},
 		{name: "empty file", contents: ptr(""), want: slog.LevelInfo},
 		{name: "log level", contents: ptr("log_level: debug\n"), want: slog.LevelDebug},
@@ -47,6 +49,13 @@ func TestLoad(t *testing.T) {
 			}
 			if err == nil && !slices.Equal(cfg.CriticCommand, wantCmd) {
 				t.Errorf("CriticCommand = %v, want %v", cfg.CriticCommand, wantCmd)
+			}
+			wantReviewer := tt.wantReviewer
+			if wantReviewer == nil {
+				wantReviewer = []string{"claude", "-p"}
+			}
+			if err == nil && !slices.Equal(cfg.ReviewerCommand, wantReviewer) {
+				t.Errorf("ReviewerCommand = %v, want %v", cfg.ReviewerCommand, wantReviewer)
 			}
 		})
 	}

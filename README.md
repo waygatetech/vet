@@ -42,6 +42,20 @@ critique_responses:
   C2: "Accepted risk: single writer only."
 ```
 
+### review
+
+```sh
+vet review --plan plans/x-1.md [--base main] [--context why.txt ...] [--json]
+```
+
+`vet review` gives a fresh-context reviewer only the plan, the diff, and any
+`--context` files (for example human rulings, so it can flag changes that
+contradict them without a supersedes entry). It never sees the implementation
+transcript. The diff runs from the merge base of `--base` and `HEAD` to the
+working tree, plus untracked files. vet prints the findings, or the JSON report
+with `--json`, and exits 1 on any blocking finding. If the reviewer fails or
+returns malformed output, vet exits 3.
+
 ## Config
 
 vet reads `.vet.yaml` from the current directory if it exists. A file passed
@@ -50,6 +64,7 @@ with `--config` must exist. Unknown keys are an error.
 ```yaml
 log_level: info                 # debug | info | warn | error
 critic_command: [claude, -p]    # argv for vet critique; prompt is sent on stdin
+reviewer_command: [claude, -p]  # argv for vet review; prompt is sent on stdin
 ```
 
 ## Exit codes
@@ -74,4 +89,5 @@ Checks emit a JSON report:
 ```
 
 `severity` is one of `blocking`, `warning`, or `info`. Only `blocking` fails the gate.
-`file` and `line` are omitted when they don't apply.
+`file`, `line`, and `acceptance_ref` (the acceptance criterion a review finding
+relates to) are omitted when they don't apply.

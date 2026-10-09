@@ -4,11 +4,8 @@ package critique
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 
@@ -54,44 +51,6 @@ func Prompt(ticket, plan, concepts string, context []File) string {
 		section("CONTEXT: "+f.Name, f.Content)
 	}
 	return b.String()
-}
-
-// Run executes argv with prompt on stdin and parses its findings report.
-// Any failure, including malformed output, is an error so the gate fails closed.
-func Run(ctx context.Context, argv []string, prompt string) (findings.Report, error) {
-	if len(argv) == 0 {
-		return findings.Report{}, errors.New("critic command is empty")
-	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdin = strings.NewReader(prompt)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return findings.Report{}, fmt.Errorf("running critic %q: %w: %s", argv[0], err, strings.TrimSpace(stderr.String()))
-	}
-	return parse(out)
-}
-
-// parse extracts the outermost JSON object, tolerating code fences or prose
-// around it, and requires a findings key.
-func parse(out []byte) (findings.Report, error) {
-	start, end := bytes.IndexByte(out, '{'), bytes.LastIndexByte(out, '}')
-	if start < 0 || end < start {
-		return findings.Report{}, fmt.Errorf("critic output has no JSON object: %q", out)
-	}
-	var raw struct {
-		Findings *[]findings.Finding `json:"findings"`
-	}
-	dec := json.NewDecoder(bytes.NewReader(out[start : end+1]))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&raw); err != nil {
-		return findings.Report{}, fmt.Errorf("decoding critic output: %w", err)
-	}
-	if raw.Findings == nil {
-		return findings.Report{}, errors.New("critic output is missing \"findings\"")
-	}
-	return findings.Report{Findings: *raw.Findings}, nil
 }
 
 // Render formats the report as the critique file, one "## C<n>" item per finding.

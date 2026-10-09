@@ -13,3 +13,6 @@ findings:
 critique:
   owner: brianseitel
   module: internal/critique
+review:
+  owner: brianseitel
+  module: internal/review
